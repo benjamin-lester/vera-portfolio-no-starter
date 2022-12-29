@@ -1,0 +1,93 @@
+# This workflow builds Gatsby project, copies the public/ folder to the droplet, and deploys the changes by (re)starting the gatsby service
+#   set up on the web server.
+# Prerequisites: 
+#     1) set up Caddy reverse proxy 
+#     2) set up systemctl service to execute dll 
+
+name: Vera Website Gatsby deployment
+
+env:
+   WEBSITE: VeraIvezic.com
+   PROJECT: VeraIvezic
+   
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: # lets us trigger action manually
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Detect package manager
+      id: detect-package-manager
+      run: |
+        if [ -f "${{ github.workspace }}/yarn.lock" ]; then
+          echo "manager=yarn" >> $GITHUB_OUTPUT
+          echo "command=install" >> $GITHUB_OUTPUT
+          exit 0
+        elif [ -f "${{ github.workspace }}/package.json" ]; then
+          echo "manager=npm" >> $GITHUB_OUTPUT
+          echo "command=ci" >> $GITHUB_OUTPUT
+          exit 0
+        else
+          echo "Unable to determine packager manager"
+          exit 1
+        fi
+    - name: Setup Node
+      uses: actions/setup-node@v3
+      with:
+        node-version: "18"
+        cache: ${{ steps.detect-package-manager.outputs.manager }}
+    - name: Restore cache
+      uses: actions/cache@v3
+      with:
+        path: |
+          public
+          .cache
+        key: ${{ runner.os }}-gatsby-build-${{ hashFiles('public') }}
+        restore-keys: |
+          ${{ runner.os }}-gatsby-build-
+    - name: Install dependencies
+      run: ${{ steps.detect-package-manager.outputs.manager }} ${{ steps.detect-package-manager.outputs.command }}
+    - name: Build with Gatsby
+      env:
+        PREFIX_PATHS: 'true'
+      run: ${{ steps.detect-package-manager.outputs.manager }} run build
+    - name: Upload artifact
+      uses: actions/upload-pages-artifact@v1
+      with:
+        path: ./public      
+    # Deployment job
+    - name: Deploy
+      run: |
+        which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )
+        which rsync || ( apt-get update -y && apt-get install rsync -y )
+        eval $(ssh-agent -s)
+        ssh-add <(echo "$SSH_PRIVATE_KEY")
+        mkdir -p ~/.ssh
+        chmod 700 ~/.ssh
+        ssh-keyscan $SERVER_IP >> ~/.ssh/known_hosts
+        chmod 644 ~/.ssh/known_hosts
+        scp -r "$GITHUB_WORKSPACE"/public/* $USERNAME@$SERVER_IP:/var/www/$WEBSITE
+    env:
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_KEY }}
+      SERVER_IP: ${{ secrets.SERVER_IP }}
+      USERNAME: ${{ secrets.USERNAME }} 
+  sshcommands:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+    - name: SSH Remote Commands
+      uses: appleboy/ssh-action@v0.1.5
+      with:
+        host: ${{ secrets.SERVER_IP }}
+        username: ${{ secrets.USERNAME }}
+        key: ${{ secrets.SSH_KEY }}
+        script: |
+          ls -al /var/www/$WEBSITE 2>/dev/null # to see if the files were copied
+          sudo /bin/systemctl restart gatsby-vera.service
+  
