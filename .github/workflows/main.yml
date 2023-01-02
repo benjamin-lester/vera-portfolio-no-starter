@@ -1,15 +1,15 @@
 # This workflow builds Gatsby project, copies the public/ folder to the droplet, and deploys the changes by (re)starting the gatsby service
-#   set up on the web server.
+#  set up on the web server.
 # Prerequisites: 
-#     1) set up Caddy reverse proxy 
-#     2) set up systemctl service to execute dll 
+#   1) set up Caddy reverse proxy 
+#   2) set up systemctl service to execute dll 
 
 name: Vera Website Gatsby deployment
 
 env:
-   WEBSITE: VeraIvezic.com
-   PROJECT: VeraIvezic
-   
+  WEBSITE: VeraIvezic.com
+  PROJECT: VeraIvezic
+  
 on:
   push:
     branches: [ "main" ]
@@ -19,60 +19,68 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - name: Detect package manager
-      id: detect-package-manager
-      run: |
-        if [ -f "${{ github.workspace }}/yarn.lock" ]; then
-          echo "manager=yarn" >> $GITHUB_OUTPUT
-          echo "command=install" >> $GITHUB_OUTPUT
-          exit 0
-        elif [ -f "${{ github.workspace }}/package.json" ]; then
-          echo "manager=npm" >> $GITHUB_OUTPUT
-          echo "command=ci" >> $GITHUB_OUTPUT
-          exit 0
-        else
-          echo "Unable to determine packager manager"
-          exit 1
-        fi
-    - name: Setup Node
-      uses: actions/setup-node@v3
-      with:
-        node-version: "18"
-        cache: ${{ steps.detect-package-manager.outputs.manager }}
-    - name: Restore cache
-      uses: actions/cache@v3
-      with:
-        path: |
-          public
-          .cache
-        key: ${{ runner.os }}-gatsby-build-${{ hashFiles('public') }}
-        restore-keys: |
-          ${{ runner.os }}-gatsby-build-
-    - name: Install dependencies
-      run: ${{ steps.detect-package-manager.outputs.manager }} ${{ steps.detect-package-manager.outputs.command }}
-    - name: Build with Gatsby
-      env:
-        PREFIX_PATHS: 'true'
-      run: ${{ steps.detect-package-manager.outputs.manager }} run build
-    - name: Upload artifact
-      uses: actions/upload-pages-artifact@v1
-      with:
-        path: ./public      
-    # Deployment job
-    - name: Deploy
-      run: |
-        which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )
-        which rsync || ( apt-get update -y && apt-get install rsync -y )
-        eval $(ssh-agent -s)
-        ssh-add <(echo "$SSH_PRIVATE_KEY")
-        mkdir -p ~/.ssh
-        chmod 700 ~/.ssh
-        ssh-keyscan $SERVER_IP >> ~/.ssh/known_hosts
-        chmod 644 ~/.ssh/known_hosts
-        scp -r "$GITHUB_WORKSPACE"/public/* $USERNAME@$SERVER_IP:/var/www/$WEBSITE
-    env:
-      SSH_PRIVATE_KEY: ${{ secrets.SSH_KEY }}
-      SERVER_IP: ${{ secrets.SERVER_IP }}
-      USERNAME: ${{ secrets.USERNAME }} 
-  
+      - uses: actions/checkout@v3
+      - name: Detect package manager
+        id: detect-package-manager
+        run: |
+          if [ -f "${{ github.workspace }}/yarn.lock" ]; then
+            echo "manager=yarn" >> $GITHUB_OUTPUT
+            echo "command=install" >> $GITHUB_OUTPUT
+            exit 0
+          elif [ -f "${{ github.workspace }}/package.json" ]; then
+            echo "manager=npm" >> $GITHUB_OUTPUT
+            echo "command=ci" >> $GITHUB_OUTPUT
+            exit 0
+          else
+            echo "Unable to determine packager manager"
+            exit 1
+          fi
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: "18"
+          cache: ${{ steps.detect-package-manager.outputs.manager }}
+      - name: Restore cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            public
+            .cache
+          key: ${{ runner.os }}-gatsby-build-${{ hashFiles('public') }}
+          restore-keys: |
+            ${{ runner.os }}-gatsby-build-
+      - name: Install dependencies
+        run: ${{ steps.detect-package-manager.outputs.manager }} ${{ steps.detect-package-manager.outputs.command }}
+      - name: Build with Gatsby
+        env:
+          PREFIX_PATHS: 'true'
+        run: ${{ steps.detect-package-manager.outputs.manager }} run build
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          name: static-website
+          path: ./public/
+  # Deployment job
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/download-artifact@v3
+        with:
+          name: static-website
+          path: ./public/
+      - name: Upload files
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_KEY }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          USERNAME: ${{ secrets.USERNAME }}
+        run: |
+          which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )
+          which rsync || ( apt-get update -y && apt-get install rsync -y )
+          eval $(ssh-agent -s)
+          ssh-add <(echo "$SSH_PRIVATE_KEY")
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan $SERVER_IP >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          scp -r "$GITHUB_WORKSPACE"/public/* $USERNAME@$SERVER_IP:/var/www/$WEBSITE
